@@ -4,57 +4,46 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document</title>
-    <style>
-        *{
-            margin:0;
-            padding:0;
-        }
-        img{
-            width:100%;
-        }
-    </style>
-    <style>
-  /* ====== Pinch Zoom Wrapper ====== */
-  .zoom-container{
-    position: relative;
-    overflow: hidden;                 /* iScroll 뷰포트 */
-    touch-action: pan-y pinch-zoom;   /* 1x에서는 페이지 스크롤 우선 */
-    -webkit-overflow-scrolling: touch;
-    background: transparent;          /* 흰 화면 플래시 방지 */
-  }
-  .zoom-container.is-zooming{
-    touch-action: none;               /* 확대 중엔 페이지 스크롤 차단 */
-    overscroll-behavior: contain;     /* 외부로 체인 방지(흰영역 방지) */
-  }
+ <style>
+    *{margin:0;padding:0;}
+    img{display:block; width:100%; height:auto; -webkit-user-drag:none; user-select:none;}
+  
+    /* 확대 영역 */
+    .zoom-container{
+      position: relative;
+      overflow: hidden;
+      /* 중요: 한 손가락 세로 스와이프는 페이지 스크롤로 넘김 */
+      touch-action: pan-y pinch-zoom;
+      background: transparent;
+    }
+    /* 실제 변형이 걸릴 타겟 */
+    .zoom-target{
+      transform-origin: 0 0;         /* 계산 단순화 */
+      will-change: transform;
+      backface-visibility: hidden;
+    }
+    .zoom-container{ position:relative; overflow:hidden; touch-action:pan-y pinch-zoom; }
+.zoom-target{ transform-origin:0 0; will-change:transform; backface-visibility:hidden; }
+.zoom-target img{ display:block; width:100%; height:auto; -webkit-user-drag:none; user-select:none; }
 
-  /* ====== iScroll Scroller ====== */
-  .iscroll-scroller{
-    position: relative;               /* 높이/경계 계산 안정화 */
-    transform-origin: 0 0;
-    will-change: transform;
-    backface-visibility: hidden;
-  }
-  .iscroll-scroller img{
-    display:block;
-    max-width:100%;
-    height:auto;
-    -webkit-user-drag:none;
-    user-select:none;
-    pointer-events:none;
-  }
-</style>
+  </style>
+  
 <script crossorigin="anonymous" src="https://dev-img.dongwonmall.com/dwmallImg/app/js/libs/jquery-3.5.1.min.js"></script>
 </head>
 <body>
-    <h1>수정5</h1>
+    <h1>수정6</h1>
     <div class="" style="background:#f0f0f0;height:1200px;"></div>
-    <div class="zoom-container">
-        <div class="box">
-            <img src="https://dev-img.dongwonmall.com/dwmall/static_root/model_img/detail/184/86a4d8d7-8935-40fd-9cb4-a151ac52e504.jpg" alt="">
+    <div class="zoom-container" id="pz">
+        <div class="zoom-target">
+          <img src="https://dev-img.dongwonmall.com/dwmall/static_root/model_img/detail/184/86a4d8d7-8935-40fd-9cb4-a151ac52e504.jpg" alt="">
         </div>
-    </div>
+      </div>
+      
     <div class="" style="background:#ff7600;height:1200px;"></div>
-    <script src="js/libs/iscroll-zoom.js"></script>
+    <!-- <script src="js/libs/iscroll-zoom.js"></script> -->
     <script src="js/pinchzoom.js"></script>
+    <script>
+        PinchZoom.attach('.zoom-container', { maxScale: 4, doubleTapScale: 2 });
+      </script>
 </body>
 </html>
