@@ -22,80 +22,114 @@ $(function(){
       try { window.AndroidZoomBridge && AndroidZoomBridge.setZooming(zooming); } catch(e){}
     }
   
-    /* ========== 공통 패치: _zoomStart / _zoom (EMA+하드클램프) ========== */
+    /* ========== 공통 패치: _zoom (실시간 경계 재계산 + 하드클램프) ========== */
     (function patchZoom(){
-      var U = IScrollZoom.utils || {};
-      var _origZoomStart = IScrollZoom.prototype._zoomStart;
-  
-      IScrollZoom.prototype._zoomStart = function(e){
+        var U = IScrollZoom.utils || {};
+        var _origZoomStart = IScrollZoom.prototype._zoomStart;
+    
+        IScrollZoom.prototype._zoomStart = function(e){
         if (_origZoomStart) _origZoomStart.call(this, e);
         this.__pzEMA = { dist:null, cx:null, cy:null, prevCx:null, prevCy:null };
         this.__pzStartAt = (U.getTime ? U.getTime() : Date.now());
-      };
-  
-      IScrollZoom.prototype._zoom = function(ev){
+        };
+    
+        // 경계를 즉시 재계산 (refresh의 가벼운 버전)
+        function recomputeBounds(ctx){
+        // wrapper 크기(뷰포트)
+        ctx.wrapperWidth  = ctx.wrapper.clientWidth;
+        ctx.wrapperHeight = ctx.wrapper.clientHeight;
+    
+        // 스케일 반영된 콘텐츠 크기
+        // ⚠️ transform은 레이아웃에 반영되지 않으므로 offset * scale 로 계산해야 함
+        ctx.scrollerWidth  = Math.round(ctx.scroller.offsetWidth  * ctx.scale);
+        ctx.scrollerHeight = Math.round(ctx.scroller.offsetHeight * ctx.scale);
+    
+        ctx.maxScrollX = ctx.wrapperWidth  - ctx.scrollerWidth;
+        ctx.maxScrollY = ctx.wrapperHeight - ctx.scrollerHeight;
+    
+        ctx.hasHorizontalScroll = ctx.options.scrollX && ctx.maxScrollX < 0;
+        ctx.hasVerticalScroll   = ctx.options.scrollY && ctx.maxScrollY < 0;
+        }
+    
+        IScrollZoom.prototype._zoom = function(ev){
         var ET = IScrollZoom.utils && IScrollZoom.utils.eventType;
         if (!this.enabled || (ET && ET[ev.type] !== this.initiated)) return;
         if (this.options.preventDefault && ev.cancelable) ev.preventDefault();
         if (!ev.touches || !ev.touches[1]) return;
-  
+    
         var t0 = ev.touches[0], t1 = ev.touches[1];
         var dx = Math.abs(t0.pageX - t1.pageX);
         var dy = Math.abs(t0.pageY - t1.pageY);
         var dist = Math.sqrt(dx*dx + dy*dy);
         var cx   = (t0.pageX + t1.pageX)/2;
         var cy   = (t0.pageY + t1.pageY)/2;
-  
+    
+        // 약간의 EMA로 흔들림 완화
         var em = this.__pzEMA;
-        var aD = 0.28, aC = 0.30; // EMA
+        var aD = 0.28, aC = 0.30;
         if (em.dist == null) { em.dist = dist; em.cx = cx; em.cy = cy; }
         else {
-          em.dist += aD*(dist - em.dist);
-          em.cx   += aC*(cx   - em.cx);
-          em.cy   += aC*(cy   - em.cy);
+            em.dist += aD*(dist - em.dist);
+            em.cx   += aC*(cx   - em.cx);
+            em.cy   += aC*(cy   - em.cy);
         }
-  
+    
         var now   = (U.getTime ? U.getTime() : Date.now());
-        var boost = (now - this.__pzStartAt <= 120) ? (IS_ANDROID ? 1.10 : 1.05) : 1.0;
-  
+        var boost = (now - this.__pzStartAt <= 120) ? ( /Android/i.test(navigator.userAgent) ? 1.10 : 1.05 ) : 1.0;
         var desired = this.startScale * Math.pow(em.dist / this.touchesDistanceStart, boost);
-  
-        // 하드 클램프 (오버슈트 없음)
+    
+        // 하드 클램프(오버슈트 제거)
         var min = this.options.zoomMin, max = this.options.zoomMax;
         var n   = desired;
         if (n < min) n = min; else if (n > max) n = max;
-  
+    
         var hitMax = desired > max + 1e-6;
         var hitMin = desired < min - 1e-6;
-  
-        // 스케일 적용 + 앵커 보존 변환
+    
+        // 스케일 적용 전후 위치 보존 변환
         var k  = n / this.startScale;
         var nx = this.originX - this.originX*k + this.startX;
         var ny = this.originY - this.originY*k + this.startY;
-  
+    
+        // ① 스케일 업데이트
         this.scale = n;
+    
+        // ② 새 스케일 기준으로 경계 즉시 재계산(핵심!!)
+        recomputeBounds(this);
+    
+        // ③ 현재 이동 목표를 새 경계에 맞게 클램프
+        if (nx > 0 || nx < this.maxScrollX) {
+            nx = this.options.bounce ? (nx > 0 ? this.x + (nx - this.x)/3 : this.x + (nx - this.x)/3)
+                                    : (nx > 0 ? 0 : this.maxScrollX);
+        }
+        if (ny > 0 || ny < this.maxScrollY) {
+            ny = this.options.bounce ? (ny > 0 ? this.y + (ny - this.y)/3 : this.y + (ny - this.y)/3)
+                                    : (ny > 0 ? 0 : this.maxScrollY);
+        }
+    
+        // ④ 적용
         this.scrollTo(nx, ny, 0);
         this.scaled = true;
-  
-        // 최대/최소에 닿으면: 오버슈트 방지용 리베이스 + 2핀치 패닝
+    
+        // 최대/최소에 닿으면: 리베이스 + 2핀치 패닝
         if (hitMax || hitMin){
-          if (em.prevCx != null){
+            if (em.prevCx != null){
             var dcx = em.cx - em.prevCx;
             var dcy = em.cy - em.prevCy;
             this.scrollBy(-dcx, -dcy, 0);
-          }
-          this.startScale = n;
-          this.touchesDistanceStart = em.dist;
-          this.startX = this.x; this.startY = this.y;
-          this.originX = Math.abs(t0.pageX + t1.pageX)/2 + this.wrapperOffset.left - this.x;
-          this.originY = Math.abs(t0.pageY + t1.pageY)/2 + this.wrapperOffset.top  - this.y;
+            }
+            this.startScale = n;
+            this.touchesDistanceStart = em.dist;
+            this.startX = this.x; this.startY = this.y;
+            this.originX = Math.abs(t0.pageX + t1.pageX)/2 + this.wrapperOffset.left - this.x;
+            this.originY = Math.abs(t0.pageY + t1.pageY)/2 + this.wrapperOffset.top  - this.y;
         }
-  
+    
         em.prevCx = em.cx; em.prevCy = em.cy;
-  
+    
         if (this._updateNativeZoomingByScale) this._updateNativeZoomingByScale(this.scale);
-      };
-    })();
+        };
+    })(); 
   
     /* ========== 핵심 패치: _zoomEnd 점프 제거 ========== */
     (function patchZoomEnd(){
