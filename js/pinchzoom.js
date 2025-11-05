@@ -20,7 +20,7 @@ $(function(){
     /* 네이티브 브릿지(옵션) */
     function tellNative(zooming){
       try { window.AndroidZoomBridge && AndroidZoomBridge.setZooming(zooming); } catch(e){}
-    }
+    }햐
   
     /* ========== 공통 패치: _zoom (실시간 경계 재계산 + 하드클램프) ========== */
     (function patchZoom(){
@@ -33,23 +33,39 @@ $(function(){
         this.__pzStartAt = (U.getTime ? U.getTime() : Date.now());
         };
     
-        // 경계를 즉시 재계산 (refresh의 가벼운 버전)
+        // 경계를 즉시 재계산 (viewport=실화면, 오차여유)
         function recomputeBounds(ctx){
-        // wrapper 크기(뷰포트)
-        ctx.wrapperWidth  = ctx.wrapper.clientWidth;
-        ctx.wrapperHeight = ctx.wrapper.clientHeight;
-    
-        // 스케일 반영된 콘텐츠 크기
-        // ⚠️ transform은 레이아웃에 반영되지 않으므로 offset * scale 로 계산해야 함
-        ctx.scrollerWidth  = Math.round(ctx.scroller.offsetWidth  * ctx.scale);
-        ctx.scrollerHeight = Math.round(ctx.scroller.offsetHeight * ctx.scale);
-    
-        ctx.maxScrollX = ctx.wrapperWidth  - ctx.scrollerWidth;
-        ctx.maxScrollY = ctx.wrapperHeight - ctx.scrollerHeight;
-    
-        ctx.hasHorizontalScroll = ctx.options.scrollX && ctx.maxScrollX < 0;
-        ctx.hasVerticalScroll   = ctx.options.scrollY && ctx.maxScrollY < 0;
+            // ① 뷰포트는 화면 높이/너비 기준으로 제한
+            //    (컨테이너가 문서 흐름에서 커지면 iScroll이 스크롤 여유를 과소 계산하는 문제 방지)
+            var vw = ctx.wrapper.clientWidth;
+            var vh = Math.min(ctx.wrapper.clientHeight, (window.visualViewport ? window.visualViewport.height : window.innerHeight));
+        
+            ctx.wrapperWidth  = vw;
+            ctx.wrapperHeight = vh;
+        
+            // ② 스케일 반영된 콘텐츠 크기(트랜스폼은 레이아웃에 안 잡히므로 offset * scale)
+            var baseW = ctx.scroller.offsetWidth;
+            var baseH = ctx.scroller.offsetHeight;
+        
+            // 가끔 이미지 디코딩 타이밍 등으로 0 또는 비정상 값이 나오는 경우 방지
+            if (!baseW || !baseH) {
+            var rect = ctx.scroller.getBoundingClientRect();
+            baseW = baseW || Math.max(1, Math.round(rect.width  / (ctx.scale || 1)));
+            baseH = baseH || Math.max(1, Math.round(rect.height / (ctx.scale || 1)));
+            }
+        
+            ctx.scrollerWidth  = Math.round(baseW * ctx.scale);
+            ctx.scrollerHeight = Math.round(baseH * ctx.scale);
+        
+            // ③ 경계(아주 약간의 여유를 줘서 끝픽셀까지 보이게)
+            var EPS = 1; // 1px 여유
+            ctx.maxScrollX = ctx.wrapperWidth  - ctx.scrollerWidth  + EPS;
+            ctx.maxScrollY = ctx.wrapperHeight - ctx.scrollerHeight + EPS;
+        
+            ctx.hasHorizontalScroll = ctx.options.scrollX && ctx.maxScrollX < 0;
+            ctx.hasVerticalScroll   = ctx.options.scrollY && ctx.maxScrollY < 0;
         }
+  
     
         IScrollZoom.prototype._zoom = function(ev){
         var ET = IScrollZoom.utils && IScrollZoom.utils.eventType;
@@ -298,7 +314,17 @@ $(function(){
       })();
   
       // 이미지 로드 후 경계 재산출
-      afterImages(scrollerEl, function(){ z.refresh(); });
+      afterImages(scrollerEl, function(){
+        // 컨테이너 폭과 이미지 원본비로 1x 높이 산출 → 스크롤러에 고정
+        var img = scrollerEl.querySelector('img');
+        if (img && img.naturalWidth && img.naturalHeight) {
+          var w = root.clientWidth || scrollerEl.clientWidth || img.clientWidth || img.naturalWidth;
+          var h1x = Math.round(img.naturalHeight * (w / img.naturalWidth));
+          scrollerEl.style.height = h1x + 'px';   // 1배율 기준 콘텐츠 높이 고정
+        }
+        z.refresh();
+      });
+      
   
       root._iscrollZoom = z; // 디버그 핸들
     }
