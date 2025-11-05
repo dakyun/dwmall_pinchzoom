@@ -1,9 +1,10 @@
 /**
- * PinchZoom (iScrollZoom 기반) — viewport/실측 높이 보정 최종판
- * - baseH = 실제 렌더 높이(1x) 실측 후 캐싱 → scrollerHeight = baseH * scale
- * - refresh()/zoom 중 경계 모두 baseH 기준으로 일관 계산
- * - viewport = visualViewport.height(없으면 innerHeight)
- * - _zoomEnd 점프 제거, 더블탭 지원
+ * PinchZoom (iScrollZoom 기반) — 최종 안정판 (빈 화면/하단 미도달 해결)
+ * - baseH = 1x 실제 렌더 높이 측정/캐싱 → scrollerHeight = baseH * scale
+ * - viewport = visualViewport.height - bottomInset() (없으면 innerHeight 기반)
+ * - 줌 중/끝 모두 즉시-클램프(하드) → 흰 빈 화면 방지
+ * - 줌 모드: window/page 스크롤 완전 잠금 + momentum/bounce OFF
+ * - 더블탭 확대/축소 포함
  *
  * 외부 의존: iscroll-zoom.js (v5.x)
  */
@@ -17,47 +18,55 @@
       var UA = navigator.userAgent||'';
       var IS_ANDROID = /Android/i.test(UA);
   
-      /* ───── 옵션 브릿지 ───── */
+      /* ───────── 네이티브 브릿지(옵션) ───────── */
       function tellNative(zooming){
         try { window.AndroidZoomBridge && AndroidZoomBridge.setZooming(zooming); } catch(e){}
       }
   
-      /* ───── 공통 유틸 ───── */
+      /* ───────── 공통 유틸 ───────── */
       function viewportHeight(){
         return (window.visualViewport && window.visualViewport.height)
           ? Math.round(window.visualViewport.height)
           : window.innerHeight;
       }
+      // iOS 주소/툴바/홈인디케이터 보정
+      function bottomInset(){
+        var vh = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+        var ih = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || vh;
+        var diff = Math.max(0, Math.round(ih - vh));
+        var SAFE = 40; // 24→40 : 기기에 맞춰 32~48 사이로 조정 가능
+        return diff + SAFE;
+      }
       function measureBaseSize(root, scroller){
-        // 1x 상태에서 실제 렌더 높이/너비 실측 (transform 영향 없음)
-        // 이미지가 박스 안에 있더라도 "scroller의 첫 번째 실제 콘텐츠" 기준으로 측정
         var content = scroller.firstElementChild || scroller;
-        // 강제로 레이아웃 확정
-        var rect = content.getBoundingClientRect();
+        var rect = content.getBoundingClientRect(); // 1x 렌더 값
         var baseW = Math.max(1, Math.round(rect.width));
         var baseH = Math.max(1, Math.round(rect.height));
         return { baseW, baseH };
       }
   
-      /* ───── refresh() 패치: viewport/baseH 기준 경계 재산출 ───── */
+      /* ───────── refresh() 패치: viewport/baseH 기준 경계 재산출 ───────── */
       (function patchRefresh(){
         var _orig = IScrollZoom.prototype.refresh;
         IScrollZoom.prototype.refresh = function(){
           _orig.call(this);
   
           // viewport 보정
-          this.wrapperHeight = Math.min(this.wrapper.clientHeight, viewportHeight());
+          this.wrapperHeight = Math.max(
+            1,
+            Math.min(this.wrapper.clientHeight, viewportHeight()) - bottomInset()
+          );
           this.wrapperWidth  = this.wrapper.clientWidth;
   
-          // baseH 없으면(초기) 한 번 측정
+          // base 미측정 시 1회 측정
           if (!this._baseH || !this._baseW) {
             var m = measureBaseSize(this.wrapper, this.scroller);
             this._baseW = m.baseW;
             this._baseH = m.baseH;
           }
   
-          // 경계 일관 계산 (여유 1px)
-          var EPS = 1;
+          // 경계 계산 (여유)
+          var EPS = 2; // 끝픽셀까지 보이도록 약간 여유
           this.scrollerWidth  = Math.round(this._baseW * this.scale);
           this.scrollerHeight = Math.round(this._baseH * this.scale);
   
@@ -67,7 +76,7 @@
           this.hasHorizontalScroll = this.options.scrollX && this.maxScrollX < 0;
           this.hasVerticalScroll   = this.options.scrollY && this.maxScrollY < 0;
   
-          // 현재 위치를 새 경계로 즉시 클램프
+          // 즉시-클램프(빈 화면 방지)
           var nx = this.x, ny = this.y;
           if (!this.hasHorizontalScroll || nx > 0) nx = 0;
           else if (nx < this.maxScrollX) nx = this.maxScrollX;
@@ -81,7 +90,7 @@
         };
       })();
   
-      /* ───── _zoomStart/_zoom 패치: 경계 실시간 재계산 (baseH 사용) ───── */
+      /* ───────── _zoomStart/_zoom 패치: 경계 실시간 재계산(하드 클램프) ───────── */
       (function patchZoom(){
         var U = IScrollZoom.utils || {};
         var _origZoomStart = IScrollZoom.prototype._zoomStart;
@@ -91,7 +100,6 @@
           this.__pzEMA = { dist:null, cx:null, cy:null, prevCx:null, prevCy:null };
           this.__pzStartAt = (U.getTime ? U.getTime() : Date.now());
   
-          // 혹시 아직 base가 없다면 지금 즉시 측정
           if (!this._baseH || !this._baseW) {
             var m = measureBaseSize(this.wrapper, this.scroller);
             this._baseW = m.baseW;
@@ -101,10 +109,12 @@
   
         function recomputeBounds(ctx){
           ctx.wrapperWidth  = ctx.wrapper.clientWidth;
-          ctx.wrapperHeight = Math.min(ctx.wrapper.clientHeight, viewportHeight());
+          ctx.wrapperHeight = Math.max(
+            1,
+            Math.min(ctx.wrapper.clientHeight, viewportHeight()) - bottomInset()
+          );
   
-          var EPS = 1;
-          // baseH/W * scale 을 사용 (offsetHeight 의존 X)
+          var EPS = 2;
           ctx.scrollerWidth  = Math.round((ctx._baseW || 1) * ctx.scale);
           ctx.scrollerHeight = Math.round((ctx._baseH || 1) * ctx.scale);
   
@@ -113,6 +123,14 @@
   
           ctx.hasHorizontalScroll = ctx.options.scrollX && ctx.maxScrollX < 0;
           ctx.hasVerticalScroll   = ctx.options.scrollY && ctx.maxScrollY < 0;
+  
+          // 즉시-클램프(줌 중에도 빈 화면 방지)
+          var cx = ctx.x, cy = ctx.y;
+          if (!ctx.hasHorizontalScroll || cx > 0) cx = 0;
+          else if (cx < ctx.maxScrollX) cx = ctx.maxScrollX;
+          if (!ctx.hasVerticalScroll || cy > 0) cy = 0;
+          else if (cy < ctx.maxScrollY) cy = ctx.maxScrollY;
+          if (cx !== ctx.x || cy !== ctx.y) ctx._translate(cx, cy);
         }
   
         IScrollZoom.prototype._zoom = function(ev){
@@ -154,16 +172,14 @@
   
           this.scale = n;
   
-          // baseH 기준 경계 재계산
+          // 경계 재산출 + 즉시-클램프
           recomputeBounds(this);
   
-          // 경계 클램프
-          if (nx > 0 || nx < this.maxScrollX) {
-            nx = this.options.bounce ? (this.x + (nx - this.x)/3) : (nx > 0 ? 0 : this.maxScrollX);
-          }
-          if (ny > 0 || ny < this.maxScrollY) {
-            ny = this.options.bounce ? (this.y + (ny - this.y)/3) : (ny > 0 ? 0 : this.maxScrollY);
-          }
+          // 하드 클램프(보간 X, bounce=false 상태)
+          if (nx > 0) nx = 0;
+          else if (nx < this.maxScrollX) nx = this.maxScrollX;
+          if (ny > 0) ny = 0;
+          else if (ny < this.maxScrollY) ny = this.maxScrollY;
   
           this.scrollTo(nx, ny, 0);
           this.scaled = true;
@@ -188,7 +204,7 @@
         };
       })();
   
-      /* ───── _zoomEnd 패치: 점프 제거 ───── */
+      /* ───────── _zoomEnd 패치: 점프 제거 + 하드 클램프 ───────── */
       (function patchZoomEnd(){
         var ET = IScrollZoom.utils && IScrollZoom.utils.eventType;
         IScrollZoom.prototype._zoomEnd = function(e){
@@ -220,7 +236,7 @@
         };
       })();
   
-      /* ───── DOM 유틸 ───── */
+      /* ───────── DOM 유틸 ───────── */
       function wrapIntoScroller(root){
         if (root.firstElementChild && root.firstElementChild.classList.contains('iscroll-scroller')) {
           return root.firstElementChild;
@@ -247,7 +263,7 @@
         function finish(){ if(done) return; done=true; clearTimeout(t); cb(); }
       }
   
-      /* ───── 세팅 ───── */
+      /* ───────── 세팅 ───────── */
       function setup(root){
         var scrollerEl = wrapIntoScroller(root);
   
@@ -281,6 +297,34 @@
           preventDefaultException: { tagName: /^(INPUT|TEXTAREA|BUTTON|SELECT|A)$/i }
         });
   
+        /* ── 페이지 스크롤 잠금(줌 모드) ── */
+        var _scrollLock = { on:false, y:0, tmHandler:null };
+        function lockPageScroll(){
+          if (_scrollLock.on) return;
+          _scrollLock.on = true;
+          _scrollLock.y = window.scrollY || window.pageYOffset || 0;
+          document.body.style.position = 'fixed';
+          document.body.style.top = (-_scrollLock.y) + 'px';
+          document.body.style.left = '0';
+          document.body.style.right = '0';
+          document.body.style.width = '100%';
+          document.body.style.overscrollBehavior = 'none';
+          _scrollLock.tmHandler = function evBlock(e){ if (!e.cancelable) return; e.preventDefault(); };
+          window.addEventListener('touchmove', _scrollLock.tmHandler, {passive:false});
+        }
+        function unlockPageScroll(){
+          if (!_scrollLock.on) return;
+          _scrollLock.on = false;
+          document.body.style.position = '';
+          document.body.style.top = '';
+          document.body.style.left = '';
+          document.body.style.right = '';
+          document.body.style.width = '';
+          document.body.style.overscrollBehavior = '';
+          window.removeEventListener('touchmove', _scrollLock.tmHandler, {passive:false});
+          window.scrollTo(0, _scrollLock.y|0);
+        }
+  
         // 네이티브 알림(히스테리시스)
         var _zooming = false, TH_IN=1.02, TH_OUT=1.01;
         function setZooming(on){ if (_zooming===on) return; _zooming=on; tellNative(on); }
@@ -291,31 +335,42 @@
         z._updateNativeZoomingByScale = updateNativeZoomingByScale;
   
         function enterZoomMode(){
-          z.options.bounce = false;
+          z.options.bounce = false;      // 흰여백/튕김 제거
+          z.options.momentum = false;    // 관성 제거
           z.options.scrollX = true;
           z.options.scrollY = true;
           z.options.freeScroll = true;
           z.options.preventDefault = true;
+  
           root.classList.add('is-zooming');
           root.style.touchAction = 'none';
+  
+          lockPageScroll();              // 윈도우 스크롤 잠금
           setZooming(true);
           z.refresh();
         }
         function enterPageMode(){
           z.options.bounce = true;
+          z.options.momentum = true;     // 원복
           z.options.scrollX = false;
           z.options.scrollY = false;
           z.options.freeScroll = false;
           z.options.preventDefault = false;
+  
           root.classList.remove('is-zooming');
           root.style.touchAction = 'pan-y pinch-zoom';
+  
           if (z.scale !== 1) z.zoom(1, root.clientWidth/2, root.clientHeight/2, 0);
+  
+          unlockPageScroll();            // 잠금 해제
           setZooming(false);
           z.refresh();
         }
   
+        // 초기: 1x (페이지 모드)
         enterPageMode();
   
+        // 이벤트 훅
         z.on('zoomStart', enterZoomMode);
         z.on('zoomEnd',   function(){ (z.scale <= TH_OUT) ? enterPageMode() : enterZoomMode(); });
         z.on('scrollEnd', function(){ if (z.scale <= TH_OUT) enterPageMode(); });
@@ -339,11 +394,19 @@
           }, {passive:false});
         })();
   
-        // 이미지 로드 후: base 측정 → 경계 안정화
+        // 이미지 로드 후: base/높이 고정 → 경계 안정화
         afterImages(scrollerEl, function(){
-          var m = measureBaseSize(root, scrollerEl);
-          z._baseW = m.baseW;
-          z._baseH = m.baseH;
+          var img = scrollerEl.querySelector('img');
+          if (img && img.naturalWidth && img.naturalHeight) {
+            var w   = root.clientWidth || scrollerEl.clientWidth || img.clientWidth || img.naturalWidth;
+            var h1x = Math.ceil(img.naturalHeight * (w / img.naturalWidth)) + 1; // 올림 + 1px 여유
+  
+            scrollerEl.style.height = h1x + 'px';
+            img.style.height = h1x + 'px';
+  
+            z._baseW = Math.max(1, Math.round(w));
+            z._baseH = h1x;
+          }
           z.refresh();
         });
   
@@ -354,6 +417,7 @@
           visualViewport.addEventListener('scroll', vvHandler);
         }
   
+        // 디버그 핸들
         root._iscrollZoom = z;
       }
   
