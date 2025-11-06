@@ -22,7 +22,7 @@ $(function(){
       try { window.AndroidZoomBridge && AndroidZoomBridge.setZooming(zooming); } catch(e){}
     }
 
-    // ⚠️ (수정) 경계 계산 함수를 공통 스코프로 이동
+    // ✅ (수정 1) 경계 계산 함수를 공통 스코프로 이동
     // 경계를 즉시 재계산 (refresh의 가벼운 버전)
     function recomputeBounds(ctx){
     // wrapper 크기(뷰포트)
@@ -53,7 +53,7 @@ $(function(){
         this.__pzStartAt = (U.getTime ? U.getTime() : Date.now());
         };
 
-        // ⚠️ (수정) recomputeBounds 함수는 공통 스코프로 이동됨
+        // (recomputeBounds 함수는 공통 스코프로 이동됨)
 
         IScrollZoom.prototype._zoom = function(ev){
         var ET = IScrollZoom.utils && IScrollZoom.utils.eventType;
@@ -152,7 +152,7 @@ $(function(){
         // ❗ iScroll 기본 로직은 startX/startY 기준으로 다시 계산 → 점프 유발
         // → 그냥 현재 x/y를 기준으로 경계만 클램프한다.
         
-        // ⚠️ (수정) this.refresh() 대신 recomputeBounds()를 사용하여 경계 계산 로직 통일
+        // ✅ (수정 2) this.refresh() 대신 recomputeBounds()를 사용하여 경계 계산 로직 통일
         // this.refresh(); // ⬅️ BUGGY
         recomputeBounds(this); // ⬅️ FIXED
 
@@ -258,7 +258,8 @@ $(function(){
         root.style.touchAction = 'none';
 
         setZooming(true);
-        z.refresh();
+        // ✅ (수정 3) z.refresh() 대신 recomputeBounds(z) 사용
+        recomputeBounds(z);
       }
       function enterPageMode(){
         z.options.bounce = true;
@@ -274,7 +275,8 @@ $(function(){
         if (z.scale !== 1) z.zoom(1, root.clientWidth/2, root.clientHeight/2, 0);
 
         setZooming(false);
-        z.refresh();
+        // ✅ (수정 4) z.refresh() 대신 recomputeBounds(z) 사용
+        recomputeBounds(z);
       }
 
       // 초기: 1x (페이지 모드)
@@ -305,7 +307,8 @@ $(function(){
       })();
 
       // 이미지 로드 후 경계 재산출
-      afterImages(scrollerEl, function(){ z.refresh(); });
+      // ✅ (수정 5) z.refresh() 대신 recomputeBounds(z) 사용
+      afterImages(scrollerEl, function(){ recomputeBounds(z); });
 
       root._iscrollZoom = z; // 디버그 핸들
     }
