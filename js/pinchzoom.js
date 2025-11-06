@@ -1,10 +1,10 @@
 /**
- * PinchZoom (iScrollZoom 기반) — anti-jump & no-bounce
+ * PinchZoom (iScrollZoom 기반) — anti-jump & no-bounce & NO MOMENTUM
  * - _zoomEnd 패치: 손 놓을 때 점프 제거(현재 위치 유지 + 경계만 클램프)
  * - 줌 중 bounce:false → 흰 영역/튕김 제거
  * - 1x 복귀 시 scrollTo(0,0) 제거 → 현재 위치 그대로 / 페이지 스크롤 즉시 가능
  * - 더블탭 확대/축소 포함
- * - (선택) 네이티브 브릿지 tellNative(true/false)
+ * - **momentum: false** 설정으로 줌인 상태 관성(미끄러짐) 제거
  *
  * 외부 의존: iscroll-zoom.js (5.x)
  */
@@ -22,8 +22,7 @@ $(function(){
       try { window.AndroidZoomBridge && AndroidZoomBridge.setZooming(zooming); } catch(e){}
     }
 
-    // ✅ (수정 1) 경계 계산 함수를 공통 스코프로 이동
-    // 경계를 즉시 재계산 (refresh의 가벼운 버전)
+    // ✅ 경계 재계산 함수 (모든 refresh를 대체)
     function recomputeBounds(ctx){
     // wrapper 크기(뷰포트)
     ctx.wrapperWidth  = ctx.wrapper.clientWidth;
@@ -52,8 +51,6 @@ $(function(){
         this.__pzEMA = { dist:null, cx:null, cy:null, prevCx:null, prevCy:null };
         this.__pzStartAt = (U.getTime ? U.getTime() : Date.now());
         };
-
-        // (recomputeBounds 함수는 공통 스코프로 이동됨)
 
         IScrollZoom.prototype._zoom = function(ev){
         var ET = IScrollZoom.utils && IScrollZoom.utils.eventType;
@@ -152,9 +149,8 @@ $(function(){
         // ❗ iScroll 기본 로직은 startX/startY 기준으로 다시 계산 → 점프 유발
         // → 그냥 현재 x/y를 기준으로 경계만 클램프한다.
         
-        // ✅ (수정 2) this.refresh() 대신 recomputeBounds()를 사용하여 경계 계산 로직 통일
-        // this.refresh(); // ⬅️ BUGGY
-        recomputeBounds(this); // ⬅️ FIXED
+        // ✅ this.refresh() 대신 recomputeBounds()를 사용하여 경계 계산 로직 통일
+        recomputeBounds(this); 
 
         var x = this.x, y = this.y;
         if (!this.hasHorizontalScroll || x > 0) x = 0;
@@ -207,7 +203,7 @@ $(function(){
       var z = new IScrollZoom(root, {
         zoom: true,
         zoomMin: 1,
-        zoomMax: 4.0,       // ⬅ 더 키우려면 여기(예: 4.0/5.0)
+        zoomMax: 4.0,       // ⬅ 최대 줌 배율
         startZoom: 1,
 
         scrollX: true,
@@ -225,7 +221,9 @@ $(function(){
         bounce: true,           // 페이지 모드 기본값
         bounceTime: IS_ANDROID ? 450 : 350,
         deceleration: IS_ANDROID ? 0.00095 : 0.0006,
-        momentum: true,
+        
+        // 🚨 요청하신 수정 사항: 관성(미끄러짐) 완전히 제거
+        momentum: false, 
 
         click: true,
         tap: true,
@@ -258,7 +256,7 @@ $(function(){
         root.style.touchAction = 'none';
 
         setZooming(true);
-        // ✅ (수정 3) z.refresh() 대신 recomputeBounds(z) 사용
+        // ✅ z.refresh() 대신 recomputeBounds(z) 사용
         recomputeBounds(z);
       }
       function enterPageMode(){
@@ -275,7 +273,7 @@ $(function(){
         if (z.scale !== 1) z.zoom(1, root.clientWidth/2, root.clientHeight/2, 0);
 
         setZooming(false);
-        // ✅ (수정 4) z.refresh() 대신 recomputeBounds(z) 사용
+        // ✅ z.refresh() 대신 recomputeBounds(z) 사용
         recomputeBounds(z);
       }
 
@@ -307,7 +305,7 @@ $(function(){
       })();
 
       // 이미지 로드 후 경계 재산출
-      // ✅ (수정 5) z.refresh() 대신 recomputeBounds(z) 사용
+      // ✅ z.refresh() 대신 recomputeBounds(z) 사용
       afterImages(scrollerEl, function(){ recomputeBounds(z); });
 
       root._iscrollZoom = z; // 디버그 핸들
